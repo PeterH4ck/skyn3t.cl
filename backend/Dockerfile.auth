@@ -1,0 +1,58 @@
+# ============================================
+# SKYN3T ACCESS CONTROL - AUTH SERVICE DOCKERFILE
+# ============================================
+
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Install all dependencies
+RUN npm ci && npm cache clean --force
+
+# Copy source code
+COPY src/ ./src/
+
+# Build TypeScript
+RUN npm run build
+
+# ============================================
+# PRODUCTION STAGE
+# ============================================
+FROM node:20-alpine AS production
+
+# Install required packages
+RUN apk update && apk add --no-cache \
+    dumb-init \
+    curl \
+    openssl \
+    && rm -rf /var/cache/apk/*
+
+# Create non-root user
+RUN addgroup -g 1001 -S authservice && \
+    adduser -S authservice -u 1001
+
+WORKDIR /app
+
+# Copy built application
+COPY --from=builder --chown=authservice:authservice /app/node_modules ./node_modules
+COPY --from=builder --chown=authservice:authservice /app/dist ./dist
+COPY --from=builder --chown=authservice:authservice /app/package*.json ./
+
+# Create directories
+RUN mkdir -p /var/log/skyn3t-auth && \
+    chown authservice:authservice /var/log/skyn3t-auth
+
+USER authservice
+
+EXPOSE 3001
+
+# Health check for auth service
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:3001/health || exit 1
+
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "dist/server.js"]
